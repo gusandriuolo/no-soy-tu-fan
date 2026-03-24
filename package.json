@@ -1,0 +1,24 @@
+{
+  "name": "instagram-unfollowers-tracker",
+  "version": "1.0.0",
+  "description": "Extensión de Chrome para analizar quién no te sigue en Instagram",
+  "author": "Gustavo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tuuser/instagram-unfollowers-tracker.git"
+  },
+  "keywords": [
+    "instagram",
+    "unfollowers",
+    "tracker",
+    "chrome-extension",
+    "analysis"
+  ],
+  "scripts": {
+    "start": "echo 'Extension ready to load in Chrome'",
+    "build": "echo 'No build process required'"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
