@@ -1,9 +1,0 @@
-node_modules/
-.DS_Store
-.idea/
-*.swp
-*.swo
-*~
-.vscode/
-*.log
-dist/

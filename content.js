@@ -22,7 +22,6 @@ function getCookies() {
 function getUserIdFromPageData() {
     try {
         const scripts = document.querySelectorAll('script');
-
         for (let script of scripts) {
             const content = script.textContent;
             const match = content.match(/"appScopedIdentity":"(\d+)"/);
@@ -38,11 +37,11 @@ function getUserIdFromPageData() {
 }
 
 async function getUnfollowersFromPage(userId) {
-    // Obtiene la lista de SEGUIDOS con el campo follows_viewer
-    // Los unfollowers son: seguidos con follows_viewer=false (no te siguen)
     const unfollowers = [];
     let hasNextPage = true;
     let endCursor = null;
+    let totalProcessed = 0;
+    let totalFollowing = 0;
 
     const queryHash = '3dec7e2c57367ef3da3d987d89f9dbc8';
 
@@ -54,14 +53,9 @@ async function getUnfollowersFromPage(userId) {
                 fetch_mutual: false,
                 first: 24
             };
-
-            if (endCursor) {
-                variables.after = endCursor;
-            }
+            if (endCursor) variables.after = endCursor;
 
             const url = `https://www.instagram.com/graphql/query/?query_hash=${queryHash}&variables=${encodeURIComponent(JSON.stringify(variables))}`;
-
-            console.log('[CS] Fetching following/unfollowers, page:', unfollowers.length / 24 + 1);
 
             const response = await fetch(url, {
                 method: 'GET',
@@ -73,101 +67,77 @@ async function getUnfollowersFromPage(userId) {
                 }
             });
 
-            console.log('[CS] Response status:', response.status);
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.log('[CS] Error response:', errorText.substring(0, 200));
-                throw new Error(`HTTP ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
             const data = await response.json();
-            const userData = data.data?.user;
-            const followingData = userData?.edge_follow;
+            const followingData = data.data?.user?.edge_follow;
 
             if (followingData) {
-                const totalFollowing = followingData.count || 0;
-                console.log('[CS] Found following data, total:', totalFollowing, 'edges count:', followingData.edges?.length || 0);
+                totalFollowing = followingData.count || 0;
+                const edges = followingData.edges || [];
 
-                if (followingData.edges && Array.isArray(followingData.edges)) {
-                    followingData.edges.forEach(edge => {
-                        if (edge.node) {
-                            // El campo follows_viewer indica si la persona TE SIGUE
-                            // Si es false, es un unfollower (lo sigues pero no te sigue)
-                            if (!edge.node.follows_viewer) {
-                                unfollowers.push({
-                                    id: edge.node.id,
-                                    username: edge.node.username,
-                                    full_name: edge.node.full_name,
-                                    is_verified: edge.node.is_verified,
-                                    is_private: edge.node.is_private,
-                                    profile_pic_url: edge.node.profile_pic_url
-                                });
-                            }
-                        }
-                    });
-                }
+                edges.forEach(edge => {
+                    totalProcessed++;
+                    if (edge.node && !edge.node.follows_viewer) {
+                        unfollowers.push({
+                            id: edge.node.id,
+                            username: edge.node.username,
+                            full_name: edge.node.full_name,
+                            is_verified: edge.node.is_verified,
+                            is_private: edge.node.is_private,
+                            profile_pic_url: edge.node.profile_pic_url
+                        });
+                    }
+                });
 
                 const pageInfo = followingData.page_info;
                 hasNextPage = pageInfo?.has_next_page || false;
                 endCursor = pageInfo?.end_cursor || null;
 
-                console.log('[CS] Unfollowers found so far:', unfollowers.length, 'Next page:', hasNextPage);
+                // Actualización parcial — no es el resultado final todavía
+                chrome.runtime.sendMessage({
+                    action: 'updateUnfollowers',
+                    unfollowers: unfollowers,
+                    totalFollowing: totalFollowing,
+                    totalProcessed: totalProcessed   // <-- progreso real
+                }).catch(() => {});
 
-                // Enviar actualización al background
-                try {
-                    chrome.runtime.sendMessage({
-                        action: 'updateUnfollowers',
-                        unfollowers: unfollowers,
-                        totalFollowing: totalFollowing
-                    }, (response) => {
-                        console.log('[CS] updateUnfollowers enviado, respuesta:', !!response);
-                    });
-                } catch (err) {
-                    console.error('[CS] Error enviando updateUnfollowers:', err);
-                }
-
-                // Delay para evitar rate limiting
                 await new Promise(r => setTimeout(r, 2000));
             } else {
-                console.log('[CS] No following data in response');
                 hasNextPage = false;
             }
         } catch (error) {
-            console.error('[CS] Error fetching unfollowers:', error.message);
+            console.error('[CS] Error:', error.message);
             hasNextPage = false;
         }
     }
 
+    // Scan terminado de verdad
+    chrome.runtime.sendMessage({
+        action: 'scanComplete',
+        unfollowers: unfollowers,
+        totalFollowing: totalFollowing,
+        totalProcessed: totalProcessed
+    }).catch(() => {});
+
     return unfollowers;
 }
 
-
-// Escuchar mensajes del background
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     try {
         if (request.action === 'getProfileData') {
             const userId = getUserIdFromPageData();
             const cookies = getCookies();
-
-            sendResponse({
-                userId: userId,
-                cookies: cookies,
-                success: !!userId && !!cookies
-            });
+            sendResponse({ userId, cookies, success: !!userId && !!cookies });
         } else if (request.action === 'getUnfollowers') {
-            console.log('[CS] getUnfollowers solicitado para:', request.userId);
             getUnfollowersFromPage(request.userId).then(unfollowers => {
-                console.log('[CS] Enviando', unfollowers.length, 'unfollowers');
                 sendResponse({ unfollowers, success: true });
             }).catch(error => {
-                console.error('[CS] Error en getUnfollowers:', error);
                 sendResponse({ unfollowers: [], success: false, error: error.message });
             });
-            return true; // indica que sendResponse será llamado asincronamente
+            return true;
         }
     } catch (error) {
-        console.error('[CS] Error en onMessage:', error);
         sendResponse({ success: false, error: error.message });
     }
 });
